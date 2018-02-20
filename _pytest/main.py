@@ -66,8 +66,6 @@ def pytest_addoption(parser):
                     help="try to interpret all arguments as python packages.")
     group.addoption("--ignore", action="append", metavar="path",
                     help="ignore path during collection (multi-allowed).")
-    group.addoption("--deselect", action="append", metavar="nodeid_prefix",
-                    help="deselect item during collection (multi-allowed).")
     # when changing this to --conf-cut-dir, config.py Conftest.setinitial
     # needs upgrading as well
     group.addoption('--confcutdir', dest="confcutdir", default=None,
@@ -183,13 +181,18 @@ def _in_venv(path):
                  'Activate', 'Activate.bat', 'Activate.ps1')
     return any([fname.basename in activates for fname in bindir.listdir()])
 
+def _ignore_paths_nodeids(ignored):
+    ignored_paths = [x for x in ignored if not '::' in x]
+    nodeid_prefixes = set(ignored) - set(ignored_paths)
+    return tuple(ignored_paths), tuple(nodeid_prefixes)
 
 def pytest_ignore_collect(path, config):
     ignore_paths = config._getconftest_pathlist("collect_ignore", path=path.dirpath())
     ignore_paths = ignore_paths or []
     excludeopt = config.getoption("ignore")
     if excludeopt:
-        ignore_paths.extend([py.path.local(x) for x in excludeopt])
+        paths, _ = _ignore_paths_nodeids(excludeopt)
+        ignore_paths.extend([py.path.local(x) for x in paths])
 
     if py.path.local(path) in ignore_paths:
         return True
@@ -211,21 +214,20 @@ def pytest_ignore_collect(path, config):
 
 
 def pytest_collection_modifyitems(items, config):
-    deselect_prefixes = tuple(config.getoption("deselect") or [])
-    if not deselect_prefixes:
-        return
+    excludeopt = config.getoption("ignore")
+    if excludeopt:
+        _, nodeid_prefixes = _ignore_paths_nodeids(excludeopt)
+        remaining = []
+        deselected = []
+        for colitem in items:
+            if colitem.nodeid.startswith(nodeid_prefixes):
+                deselected.append(colitem)
+            else:
+                remaining.append(colitem)
 
-    remaining = []
-    deselected = []
-    for colitem in items:
-        if colitem.nodeid.startswith(deselect_prefixes):
-            deselected.append(colitem)
-        else:
-            remaining.append(colitem)
-
-    if deselected:
-        config.hook.pytest_deselected(items=deselected)
-        items[:] = remaining
+        if deselected:
+            config.hook.pytest_deselected(items=deselected)
+            items[:] = remaining
 
 
 @contextlib.contextmanager
